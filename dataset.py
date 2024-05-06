@@ -20,12 +20,13 @@ logger.addHandler(console_handler)
 
 def save_dcm_to_npy():
     metadata_by_key = pd.read_csv(METADATA_PATH).groupby(['Subject ID', 'Study UID'])
+    print("\rsave_dcm_to_npy: 0%", end='')
     for i, (keys, values) in enumerate(metadata_by_key):
         subject_id, study_id = keys
         dir_name = f"{subject_id}_{study_id}"
         os.mkdir(os.path.join(OUTPUT, dir_name))
         values.sort_values(by='Modality', inplace=True)
-        series_path = ""
+        series_path = ''
         for i, r in values.iterrows():
             path = os.path.join(DATA_DIRECTORY, r['File Location'])
             if r['Modality'] == 'MR':    
@@ -38,7 +39,7 @@ def save_dcm_to_npy():
             else:
                 logger.debug("This modality shouldn't exist: " + r['Modality'])
         
-        print(f"\rsave_dcm_to_npy: {i//len(metadata_by_key)*100} %", end='')
+        print(f"\rsave_dcm_to_npy: {(i+1)//len(metadata_by_key)*100} %", end='')
     
     print("\ndone\n")
 
@@ -71,8 +72,20 @@ def save_RTD_npy(file_path: str, dir_name):
     for file_name in os.listdir(file_path):
         if file_name.endswith('.dcm'):
             rtdose_struct_path = os.path.join(file_path, file_name) 
-            rtdose = pydicom.dcmread(rtdose_struct_path)
-            rtdose_array = rtdose._pixel_array
+            ds = pydicom.dcmread(rtdose_struct_path)
+
+            dose_grid = ds.pixel_array * ds.DoseGridScaling  # Get dose data with scaling
+            # dose_spacing = [float(x) for x in ds.PixelSpacing] + [float(ds.SliceThickness)]  # X, Y, Z spacing
+            # image_position_patient = ds.ImagePositionPatient  # Optional: Image position
+
+            # *** Step 3: Create a NumPy array ***
+            rtdose_array = np.array(dose_grid)
+
+            # If necessary, reshape the array based on the number of frames:
+            if rtdose_array.ndim == 4:  # Check if there are multiple frames
+                num_frames = ds.NumberOfFrames 
+                rtdose_array = rtdose_array.reshape(num_frames, *rtdose_array.shape[1:])  
+                
             np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_RTD.npy"), rtdose_array)
             
 def crop_lesions():
