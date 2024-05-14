@@ -11,27 +11,45 @@ def display(plt, axes, images, cur_row, c, f_type):
 def display_data(folder_path:str):
     files = [f for f in os.listdir(folder_path)]
     
-    RTD_file = [f for f in files if "RTD" in f][0]
-    MR_file = [f for f in files if "MR" in f][0]
-    RTS_file = [f for f in files if "RTS" in f][1]
+    RTD_file = [f for f in files if f.endswith("RTD.npy")][0]
+    MR_file = [f for f in files if f.endswith("MR.npy")][0]
+    RTS_file = [f for f in files if f.endswith("RTS.npy")][0]
+    MR_les_file = [f for f in files if f.endswith("MR_les.npy")][0]
+    RTD_les_file = [f for f in files if f.endswith("RTD_les.npy")][0]
     
     RTD_array = np.load(os.path.join(folder_path, RTD_file))
     MR_array = np.load(os.path.join(folder_path, MR_file))
     RTS_array = np.load(os.path.join(folder_path, RTS_file))
-    
-    r,c = 3, 9
+    RTD_les_array = np.load(os.path.join(folder_path, RTD_les_file))
+    MR_les_array = np.load(os.path.join(folder_path, MR_les_file))
+    r,c = 5, 9
 
 # Create the figure and subplots
     fig, axes = plt.subplots(nrows=r, ncols=c, figsize=(20,10))
     
-    images = [RTS_array[i] for i in np.linspace(0, RTS_array.shape[0], c+2, dtype=int)[1:-1]]
+    buono = np.nonzero(RTS_array>0)
+    buono = np.hstack([b for b in buono])
+    buono = np.sort(np.unique(buono))
+    print(buono)
+    
+    indexes = np.linspace((np.max(buono)+np.min(buono))//2, np.max(buono), c+2, dtype=int)[1:-1]
+    
+    print(indexes)
+    
+    images = RTS_array[indexes]
     display(plt, axes, images, 0, c, "RTS")
     
-    images = [RTD_array[i] for i in np.linspace(0, RTD_array.shape[0], c+2, dtype=int)[1:-1]]
+    images = RTD_array[indexes]
     display(plt, axes, images, 1, c, "RTD")
     
-    images = [MR_array[i] for i in np.linspace(0, MR_array.shape[0], c+2, dtype=int)[1:-1]]
+    images = MR_array[indexes]
     display(plt, axes, images, 2, c, "MR")
+    
+    images = MR_les_array[indexes]
+    display(plt, axes, images, 3, c, "MR")
+    
+    images = RTD_les_array[indexes]
+    display(plt, axes, images, 4, c, "MR")
     
     os.makedirs(os.path.join(os.curdir, "sample_images"), exist_ok=True)
     name = folder_path.split('\\')[-1]

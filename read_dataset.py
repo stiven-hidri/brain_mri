@@ -6,140 +6,104 @@ import pydicom
 from rt_utils import RTStructBuilder
 import logging
 import shutil
-DATA_DIRECTORY = '../descriptive'
+import skimage
+from scipy.ndimage import zoom
+
+
+DATA_DIRECTORY = os.path.join('..', 'descriptive')
 METADATA_PATH = os.path.join(DATA_DIRECTORY, 'metadata.csv')
-OUTPUT = '../data'
+OUTPUT = os.path.join('..', 'data')
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-console_handler = logging.StreamHandler() 
-logger.addHandler(console_handler)
-
-def resample_rtdose_to_mri(rtdose, mri):
-    dose_grid = rtdose.pixel_array
-    dose_grid_scaling = rtdose.DoseGridScaling
-    dose_origin = rtdose.ImagePositionPatient  # in mm
-    dose_orientation = rtdose.ImageOrientationPatient
-    dose_pixel_spacing = rtdose.PixelSpacing  # in mm/pixel
-    dose_slice_thickness = rtdose.SliceThickness  # in mm
-
-    mri_origin = mri.ImagePositionPatient
-    mri_orientation = mri.ImageOrientationPatient
-    mri_pixel_spacing = mri.PixelSpacing
-    mri_slice_thickness = mri.SliceThickness
-
-    # Construct coordinate arrays for the RTDOSE grid
-    dose_shape = dose_grid.shape
-
-    # ... Construct dose_coords: 3D coordinates of the RTDOSE grid points (x, y, z) ...
-    # (Implementation depends on the specifics of your DICOM files and coordinate systems.
-    # You might need to consider slice orientation, direction cosines, etc.)
-
-    # Calculate the transformation matrix (consider using a specialized library)
-    # ... transform_matrix = calculate_transformation(dose_origin, dose_orientation, dose_pixel_spacing, dose_slice_thickness,
-    #                                                 mri_origin, mri_orientation, mri_pixel_spacing, mri_slice_thickness)
-
-    # Map dose_coords to the MRI space using the transformation matrix
-    mri_coords = transform_matrix @ dose_coords
-
-    # Resample the RTDOSE using interpolation (e.g., linear)
-    resampled_dose = map_coordinates(dose_grid * dose_grid_scaling, mri_coords, order=1, mode='nearest')
-
-    # Reshape the resampled dose to match the MRI shape
-    resampled_dose = resampled_dose.reshape(mri.pixel_array.shape)
-    return resampled_dose
+def handle_MR_RTD(path_MR, path_RTD, dir_name): 
+    #MR dicoms
+    file_names_MR = [os.path.join(path_MR, f) for f in os.listdir(path_MR) if f.endswith('.dcm')]        
+    mr_data = [pydicom.dcmread(p) for p in file_names_MR] 
+    mr_pixel_data = [p.pixel_array for p in mr_data] 
+    
+    RefDs = mr_data[0]
+    
+    # print(f"MR io: {RefDs.ImageOrientationPatient}") 
+    
+    ConstPixelDims = (int(RefDs.Rows), int(RefDs.Columns), len(file_names_MR))
+    ArrayDicom =  np.empty(ConstPixelDims, dtype=RefDs.pixel_array.dtype)
+    for i, pa in enumerate(mr_pixel_data):
+        ArrayDicom[:, :, i] = pa
+    
+    
+    #RTD dicom  
+    file_path_RTD  = [os.path.join(path_RTD, f) for f in os.listdir(path_RTD) if f.endswith('.dcm')][0]
+    rtdose_array = pydicom.dcmread(file_path_RTD).pixel_array
+    
+    # print(f"RTD io: {pydicom.dcmread(file_path_RTD).ImageOrientationPatient}")
+    
+    target_shape = ArrayDicom.shape
+    original_shape = rtdose_array.shape
+    factor = (target_shape[0]/original_shape[0], target_shape[1]/original_shape[1], target_shape[2]/original_shape[2])
+    
+    mapped_dose = zoom(rtdose_array, factor)
+    
+    # print(f"rtdose_data shape: {rtdose_array.shape}") 
+    # print(f"mapped_dose shape: {mapped_dose.shape}")
+    # print(f"array dicom shape: {ArrayDicom.shape}")
+    
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_RTD.npy"), mapped_dose) 
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_MR.npy"), ArrayDicom)
+    
+    return (ArrayDicom, mapped_dose)
 
 def save_dcm_to_npy():
     metadata_by_subjectid = pd.read_csv(METADATA_PATH).groupby(['Subject ID'])
+    count = 0
     print("Saving dcm to npy...")
+    print(f"\r0/76", end='')
     for (subject_id, values) in metadata_by_subjectid:
         metadata_by_studyuid = values.groupby(["Study UID"])
-        
         subject_id=subject_id[0]
         for (study_uid, values) in metadata_by_studyuid:
             study_uid = study_uid[0]
             dir_name = f"{subject_id}_{study_uid}"
-            os.mkdir(os.path.join(OUTPUT, dir_name))
-            values.sort_values(by='Modality', inplace=True)
-            series_path = ''
-            for i, r in values.iterrows():
-                path = os.path.join(DATA_DIRECTORY, r['File Location'])
-                #MR IMAGE
-                if r['Modality'] == 'MR':    
-                    series_path = path
-                    save_MR_npy(path, dir_name)
-                #RADIATION DOSE ON LESION
-                elif r['Modality'] == 'RTDOSE' :
-                    save_RTD_npy(path, dir_name)
-                #LESION MARKED
-                elif r['Modality'] == 'RTSTRUCT':
-                    save_RTS_npy(path, dir_name, series_path)
-                else:
-                    logger.debug("This modality shouldn't exist: " + r['Modality'])
+            os.makedirs(os.path.join(OUTPUT, dir_name), exist_ok=True)
+            values.sort_values(by='Study Date', inplace=True)
             
-            crop_lesions(dir_name)      
+            path_MR = os.path.join(DATA_DIRECTORY, values.loc[values["Modality"] == "MR", "File Location"].iloc[0])
+            path_RTD = os.path.join(DATA_DIRECTORY, values.loc[values["Modality"] == "RTDOSE", "File Location"].iloc[0])
+            path_RTS = os.path.join(DATA_DIRECTORY, values.loc[values["Modality"] == "RTSTRUCT", "File Location"].iloc[0])
+                        
+            (MR, RTD) = handle_MR_RTD(path_MR, path_RTD, dir_name)
             
-            print(f"\rsave_dcm_to_npy: {subject_id} done", end='')
+            RTS = handle_RTS_npy(path_RTS, dir_name, path_MR)
+            
+            crop_and_save(MR, RTD, RTS, dir_name)      
+            
+            count +=1
+            
+            print(f"\r{count}/76", end='')
     
     print("\ndone\n")
 
-def save_MR_npy(files_path: str, dir_name:str):
-    list_files_DCM = []
-    for file_name in os.listdir(files_path):
-        if file_name.endswith('.dcm'):
-            list_files_DCM.append(os.path.join(files_path, file_name))
-            RefDs = dicom.read_file(list_files_DCM[0])
-            ConstPixelDims = (int(RefDs.Rows), int(RefDs.Columns), len(list_files_DCM))
-            ArrayDicom = np.zeros(ConstPixelDims, dtype=RefDs.pixel_array.dtype)
-            for filenameDCM in list_files_DCM:
-                ds = dicom.read_file(filenameDCM)
-                ArrayDicom[:, :, list_files_DCM.index(filenameDCM)] = ds.pixel_array
-            np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_MR.npy"), ArrayDicom)
+def handle_RTS_npy(path_RTS, dir_name, series_path):
+    rt_struct_path = [os.path.join(path_RTS, f) for f in os.listdir(path_RTS) if f.endswith('.dcm')][0]
+    rtstruct = RTStructBuilder.create_from(dicom_series_path=series_path, rt_struct_path=rt_struct_path)
+    names = rtstruct.get_roi_names()
+    masks = []
+    for name in names:
+        if "Skull" not in name: # exclude skull annotations
+            mask_3d = rtstruct.get_roi_mask_by_name(name)
+            masks.append(mask_3d * 1)
+    
+    combined_mask = np.logical_or.reduce(masks).astype(np.uint8)
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_RTS.npy"), combined_mask)
+    return combined_mask
             
-def save_RTS_npy(file_path:str, dir_name, series_path):
-    for file_name in os.listdir(file_path):
-        if file_name.endswith('.dcm'):
-            rt_struct_path = os.path.join(file_path, file_name)
-            rtstruct = RTStructBuilder.create_from(dicom_series_path=series_path, rt_struct_path=rt_struct_path)
-            names = rtstruct.get_roi_names()
-            masks = []
-            for name in names:
-                if "Skull" not in name: # exclude skull annotations
-                    mask_3d = rtstruct.get_roi_mask_by_name(name)
-                    masks.append(mask_3d * 1)
-            
-            combined_mask = np.logical_or.reduce(masks).astype(np.uint8)                      
-            np.save(os.path.join(OUTPUT, dir_name,  f"{dir_name}_RTS.npy"), combined_mask)
-
-def save_RTD_npy(file_path: str, dir_name):
-    for file_name in os.listdir(file_path):
-        if file_name.endswith('.dcm'):
-            rtdose_struct_path = os.path.join(file_path, file_name) 
-            ds = pydicom.dcmread(rtdose_struct_path)
-
-            dose_grid = ds.pixel_array * ds.DoseGridScaling  # Get dose data with scaling
-            # dose_spacing = [float(x) for x in ds.PixelSpacing] + [float(ds.SliceThickness)]  # X, Y, Z spacing
-            # image_position_patient = ds.ImagePositionPatient  # Optional: Image position
-
-            # *** Step 3: Create a NumPy array ***
-            rtdose_array = np.array(dose_grid)
-
-            # If necessary, reshape the array based on the number of frames:
-            if rtdose_array.ndim == 4:  # Check if there are multiple frames
-                num_frames = ds.NumberOfFrames 
-                rtdose_array = rtdose_array.reshape(num_frames, *rtdose_array.shape[1:])  
-                
-            np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_RTD.npy"), rtdose_array)
-            
-def crop_lesions(dir_name:str):   
-    MR_path = os.path.join(OUTPUT, dir_name, f"{dir_name}_MR.npy")
-    RTS_path = os.path.join(OUTPUT, dir_name, f"{dir_name}_RTS.npy")
-    MR_arr = np.load(MR_path)
-    LES_mask_arr = np.load(RTS_path)
-    LES_arr = LES_mask_arr * MR_arr
-    LES_arr_cropped = crop_les(LES_arr)
-    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_LES.npy"), LES_arr)
-    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_LESc.npy"), LES_arr_cropped)
+def crop_and_save(MR, RTD, RTS, dir_name):   
+    MR_les = RTS * MR
+    MR_les_cropped = crop_les(MR_les)
+    RTD_les = RTS * RTD
+    RTD_les_cropped = crop_les(RTD_les)
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_MR_les.npy"), MR_les)
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_MR_lesc.npy"), MR_les_cropped)
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_RTD_les.npy"), RTD_les)
+    np.save(os.path.join(OUTPUT, dir_name, f"{dir_name}_RTD_lesc.npy"), RTD_les_cropped)
 
 def crop_les(d):
     true_points = np.argwhere(d)
