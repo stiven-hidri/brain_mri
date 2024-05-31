@@ -5,34 +5,65 @@ import tensorflow as tf
 import seaborn as sns
 from tensorflow import keras
 from keras import optimizers, layers, metrics
-from keras.callbacks import ModelCheckpoint
 from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score, accuracy_score
-
-print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
-
-# data sampling & cross-validation not included in this script
-
-Data_X1_0 = np.load("train_npy/Data_X1_0.npy")
-Data_X1_1 = np.load("train_npy/Data_X1_1.npy")
-Data_X2_0 = np.load("train_npy/Data_X2_0.npy")
-Data_X2_1 = np.load("train_npy/Data_X2_1.npy")
-Data_y_0 = np.load("train_npy/Data_y_0.npy")
-Data_y_1 = np.load("train_npy/Data_y_1.npy")
-test_X1 = np.load("train_npy/test_X1.npy")
-test_X2 = np.load("train_npy/test_X2.npy")
-test_y = np.load("train_npy/test_y.npy")
-
-Data_X1 = np.concatenate((Data_X1_0, Data_X1_1), axis=0)
-Data_X2 = np.concatenate((Data_X2_0, Data_X2_1), axis=0)
-Data_y = np.concatenate((Data_y_0, Data_y_1), axis=0)
-
+from sklearn.model_selection import train_test_split
+from sklearn import preprocessing
+from tensorflow.keras import backend as K
 from model import get_model
+import os
+
+## TODO: aggiusta sto train diobono
+
+RTDOSES_PATH = os.path.join("..", "all_rtdoses.npy")
+LESIONS_PATH = os.path.join("..", "all_lesions.npy")
+LABELS_PATH = os.path.join("..", "all_labels.npy")
+CLINIC_DATA_PATH = os.path.join("..", "all_clinic_data.npy")
+
+all_rtdoses = np.load(RTDOSES_PATH)
+all_lesions = np.load(LESIONS_PATH)
+all_labels = np.load(LABELS_PATH)
+all_clinic_data = np.load(CLINIC_DATA_PATH)
+
+assert len(all_rtdoses) == len(all_lesions) == len(all_labels) == len(all_clinic_data)
+
+
+
+def specificity(y_true, y_pred):
+    y_pred = tf.math.round(y_pred)  # Round probabilities to 0 or 1 if needed
+    tn = tf.math.reduce_sum(tf.cast((1. - tf.cast(y_true, tf.float32)) * (1 - y_pred), tf.float32))
+    fp = tf.math.reduce_sum(tf.cast((1. - tf.cast(y_true, tf.float32)) * y_pred, tf.float32))
+    return tn / (tn + fp + tf.keras.backend.epsilon())
+
 model = get_model()
-checkpoint = ModelCheckpoint('.mdl_wts.hdf5', verbose=1, monitor='val_accuracy',save_best_only=True)
-model.compile(optimizer="adam", loss="binary_crossentropy", metrics=['accuracy', metrics.AUC()])
-batch_size = 64
-model.fit([Data_X1, Data_X2], Data_y, epochs = 20, batch_size=batch_size, verbose = 1, validation_split=0.3,
-          callbacks=[checkpoint])
-model.load_weights(".mdl_wts.hdf5")
-model.evaluate([test_X1,test_X2],test_y)
-model.predict([test_X1,test_X2])
+model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+
+lesions_train, lesions_test, rtdoses_train, rtdoses_test, clinic_data_train, clinic_data_test, labels_train, labels_test = train_test_split(
+    all_lesions, all_rtdoses, all_clinic_data, all_labels, test_size=.2
+)
+
+model.fit( [lesions_train, rtdoses_train, clinic_data_train], labels_train, epochs=50, batch_size=64, validation_split=.2 )
+model.save("model.keras")
+
+#model = keras.models.load_model("model.h5")
+
+y_predict = model.predict([lesions_test, rtdoses_test, clinic_data_test])
+y_predict = [1 if y > .5 else 0 for y in y_predict]
+
+from sklearn.metrics import confusion_matrix
+C = confusion_matrix(labels_test, y_predict)
+
+TP = C[1,1] 
+TN = C[0,0]
+FP = C[0,1]
+FN = C[1,0]
+
+accuracy = (TP + TN) / (TP + TN + FP + FN)
+sensitivity = TP / (TP + FN)
+specificity = TN / (TN + FP)
+precision = TP / (TP + FP)
+f1_score = 2 * (precision * sensitivity) / (precision + sensitivity)
+
+print(f"Accuracy: {accuracy:.4f}")
+print(f"Sensitivity (Recall): {sensitivity:.4f}")
+print(f"Specificity: {specificity:.4f}")
+print(f"F1-score: {f1_score:.4f}")
