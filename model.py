@@ -2,7 +2,6 @@ import keras
 from keras import layers
 
 def get_model():
-
     input_l = keras.Input((40, 40, 40, 1), name="Les_Input")  # Depend on the cropped lesion shape (could be different)
 
     x = layers.Conv3D(filters=32, kernel_size=3, activation="relu")(input_l)
@@ -41,7 +40,7 @@ def get_model():
     x = layers.Dropout(0.3)(x)
     output_d = layers.Dense(units=128, activation="relu")(x)
 
-    input_c = keras.Input((6), name="Clinical_Input")
+    input_c = keras.Input((6,), name="Clinical_Input")
     x = layers.Dense(units=32, activation="relu")(input_c)
     output_c = layers.Dense(units=128, activation="relu")(x)
 
@@ -51,12 +50,3 @@ def get_model():
     # Define the model
     model = keras.Model(inputs=[input_l, input_d, input_c], outputs = [outputs], name="MultiInput")
     return model
-
-# Build model
-model = get_model()
-model.summary()
-
-# Plot model
-from tensorflow.keras.utils import plot_model
-from IPython.core.display import Image
-plot_model(model, "MultiInput.png", show_shapes=True)

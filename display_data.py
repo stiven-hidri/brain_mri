@@ -22,17 +22,12 @@ def display_data(folder_path:str):
     RTS_array = np.load(os.path.join(folder_path, RTS_file))
     RTD_les_array = np.load(os.path.join(folder_path, RTD_les_file))
     MR_les_array = np.load(os.path.join(folder_path, MR_les_file))
-    r,c = 5, 9
+    r,c = 5, 12
 
 # Create the figure and subplots
     fig, axes = plt.subplots(nrows=r, ncols=c, figsize=(20,10))
     
-    buono = np.nonzero(RTS_array>0)
-    buono = np.hstack([b for b in buono])
-    buono = np.sort(np.unique(buono))
-    print(buono)
-    
-    indexes = np.linspace((np.max(buono)+np.min(buono))//2, np.max(buono), c+2, dtype=int)[1:-1]
+    indexes = np.linspace(0, len(RTS_array), c+2, dtype=int)[1:-1]
     
     print(indexes)
     
@@ -53,7 +48,7 @@ def display_data(folder_path:str):
     
     os.makedirs(os.path.join(os.curdir, "sample_images"), exist_ok=True)
     name = folder_path.split('\\')[-1]
-    plt.savefig(os.path.join(os.curdir, "sample_images", f"{name.replace('.','')}.png"))
+    plt.savefig(os.path.join(os.curdir, "sample_images", f"old_{name.replace('.','')}.png"))
         
     # plt.figure(1)
     # plt.imshow(RTD_array[0], cmap='gray')
@@ -63,5 +58,5 @@ def display_data(folder_path:str):
     # plt.show()
 
 if __name__ == "__main__":
-    folder_path = sys.argv[1] if len(sys.argv)>1 else r"C:\\Users\\hidri\\TESI\\data\\GK_103_1.3.6.1.4.1.14519.5.2.1.261238491105529422607835392969394449648"
+    folder_path = sys.argv[1] if len(sys.argv)>1 else "C:\\Users\\hidri\\TESI\\data_old\\GK_103_1.3.6.1.4.1.14519.5.2.1.261238491105529422607835392969394449648"
     display_data(folder_path)
