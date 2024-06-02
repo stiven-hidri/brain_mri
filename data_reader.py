@@ -1,4 +1,5 @@
 import os
+import pickle
 import pandas as pd
 import numpy as np
 import pydicom as dicom
@@ -8,6 +9,7 @@ import shutil
 from scipy.ndimage import zoom
 from sklearn import preprocessing
 from utils import rm_pss, couple_roi_names
+import random
 
 class Data_Reader():
     def __init__(self) -> None:
@@ -27,12 +29,60 @@ class Data_Reader():
         self.clinic_data_cl = pd.read_excel(self.CLINIC_DATA_PATH, sheet_name='course_level')
         
         self.clinic_data = None
+
+        self.split_info = None
         
+        self.global_data = {'mr': [], 'rtd': [], 'clinic_data': [], 'label': [], 'subject_id': []}
         #final outputs 
-        self.all_clinic_data = []
-        self.all_rtdoses = []
-        self.all_lesions = []
-        self.all_labels = []
+        self.train_set = {'mr': [], 'rtd': [], 'clinic_data': [], 'label': []}
+        self.test_set = {'mr': [], 'rtd': [], 'clinic_data': [], 'label': []}
+        
+    def main(self, cleanOutDir = True):
+        self.__adjust_dataframes__()
+        
+        if cleanOutDir:
+            self.__clean_output_directory__()
+            
+        self.__split_subjects__()
+        
+        metadata_by_subjectid = self.rawdata_meta.groupby(['subject_id'])
+        
+        total_subjects = len(metadata_by_subjectid)
+        
+        print('Saving dcm to npy...')
+        
+        for cnt, (subject_id, values) in enumerate(metadata_by_subjectid):
+            metadata_by_studyuid = [(k,v) for (k,v) in values.groupby(['study_uid'])]
+            metadata_by_studyuid = sorted(metadata_by_studyuid, key = lambda x: x[1]['study_date'].iloc[0])
+            
+            subject_id = int(subject_id[0].split('_')[1]) # remove GK
+            
+            for course ,(_, values) in enumerate(metadata_by_studyuid, start=1):
+                path_MR, path_RTD, path_RTS = self.__get_mr_rtd_rts_path__(values)
+                
+                mr, rtd = self.__handle_mr_rtd__(path_MR, path_RTD)        
+                masks = self.__handle_rts__(path_RTS, path_MR, subject_id, course)
+                
+                rois = masks.keys()
+                
+                mr, rtd = self.__preprocess__(rois, mr, rtd, masks)
+                labels = self.__get_labels__(rois, subject_id, course)
+                clinic_data = self.__get_clinic_data__(rois, subject_id, course)
+                
+                self.global_data['subject_id'].append(subject_id)
+                self.global_data['mr'].append(mr)
+                self.global_data['rtd'].append(rtd)
+                self.global_data['clinic_data'].append(clinic_data)
+                self.global_data['label'].append(labels)
+                    
+            print(f'\rStep: {cnt+1}/{total_subjects}', end='')
+        
+        self.__encode_labels__()
+        self.__generate_split__()
+        self.__augment_train_set__()
+        self.__save__()
+        
+        print('\nData has been read successfully!\n')
         
     def __adjust_dataframes__(self):
         rawdata_meta_renaming = {'Study Date':'study_date','Study UID':'study_uid','Subject ID':'subject_id', 'Modality':'modality', 'File Location':'file_path'}
@@ -112,42 +162,43 @@ class Data_Reader():
         return masks
 
     def __get_labels__(self, rois, subject_id, course):
-        to_return = {}
+        to_return = []
         
         for roi in rois:    
-            label = self.clinic_data.loc[(self.clinic_data['subject_id']==subject_id)&(self.clinic_data['course']==course)&(self.clinic_data['roi']==roi), ['label']].values[0]
-            to_return[roi] = label
+            label = self.clinic_data.loc[(self.clinic_data['subject_id']==subject_id)&(self.clinic_data['course']==course)&(self.clinic_data['roi']==roi), ['label']].values[0][0]
+            to_return.append(label)
             
         return to_return
 
     def __get_clinic_data__(self, rois, subject_id, course):
-        to_return = {}
+        to_return = []
         
-        for roi in rois:    
+        for roi in rois:
             clinic_data_row = self.clinic_data.loc[(self.clinic_data['subject_id']==subject_id)&(self.clinic_data['course']==course)&(self.clinic_data['roi']==roi), ['mets_diagnosis', 'primary_diagnosis', 'age', 'gender', 'duration_tx_to_imag', 'fractions']].values[0]
-            to_return[roi] = clinic_data_row
+            to_return.append(clinic_data_row)
             
         return to_return
     
-    def __preprocess__(self, mr, rtd, masks):   
-        mr_rtd_roi = self.__mask_and_crop__(mr, rtd, masks)
+    def __preprocess__(self, rois, mr, rtd, masks):   
+        mr, rtd = self.__mask_and_crop__(rois, mr, rtd, masks)
         
-        mr_rtd_roi = self.__resize__(mr_rtd_roi)
-        mr_rtd_roi = self.__normalize__(mr_rtd_roi)
-        return mr_rtd_roi
-    def __mask_and_crop__(self, mr, rtd, masks):
-        mr_rtd_roi = {}
+        mr, rtd = self.__resize__(mr, rtd)
+        mr, rtd = self.__normalize__(mr, rtd)
+        return mr, rtd
+    def __mask_and_crop__(self, rois, mr, rtd, masks):
+        mr_return, rtd_return = [], []
         
-        for roi in masks.keys():
+        for roi in rois:
             mr_masked = masks[roi] * mr
             rtd_masked = masks[roi] * rtd
             
             mr_masked_cropped = self.__crop_les__(mr_masked)
             rtd_masked_cropped = self.__crop_les__(rtd_masked)
             
-            mr_rtd_roi[roi] = [mr_masked_cropped, rtd_masked_cropped]
+            mr_return.append(mr_masked_cropped)
+            rtd_return.append(rtd_masked_cropped)
         
-        return mr_rtd_roi
+        return mr_return, rtd_return
     
     def __crop_les__(self, image):
         true_points = np.argwhere(image)
@@ -156,131 +207,124 @@ class Data_Reader():
         cropped_arr = image[top_left[0]:bottom_right[0]+1, top_left[1]:bottom_right[1]+1, top_left[2]:bottom_right[2]+1]
         return cropped_arr
         
-    def __resize__(Self, mr_rtd_roi, target_shape=40.):
-        for roi in mr_rtd_roi.keys():
-            mr, rtd = mr_rtd_roi[roi]
+    def __resize__(Self, mr, rtd, target_shape=40.):
+        for i in range(len(mr)):
+            cur_mr, cur_rtd = mr[i], rtd[i]
             
-            factors_mr = (target_shape/float(mr.shape[0]), target_shape/float(mr.shape[1]), target_shape/float(mr.shape[2]))
-            factors_rtd = (target_shape/float(rtd.shape[0]), target_shape/float(rtd.shape[1]), target_shape/float(rtd.shape[2]))
+            factors_mr = (target_shape/float(cur_mr.shape[0]), target_shape/float(cur_mr.shape[1]), target_shape/float(cur_mr.shape[2]))
+            factors_rtd = (target_shape/float(cur_rtd.shape[0]), target_shape/float(cur_rtd.shape[1]), target_shape/float(cur_rtd.shape[2]))
             
-            mr = zoom(mr, factors_mr)
-            rtd = zoom(rtd, factors_rtd)
+            cur_mr = zoom(cur_mr, factors_mr)
+            cur_rtd = zoom(cur_rtd, factors_rtd)
             
-            mr_rtd_roi[roi] = [mr, rtd]
+            mr[i], rtd[i] = cur_mr, cur_rtd
         
-        return mr_rtd_roi
+        return mr, rtd
 
-    def __normalize__(Self, mr_rtd_roi):
-        for roi in mr_rtd_roi.keys():
-            mr, rtd = mr_rtd_roi[roi]
+    def __normalize__(Self, mr, rtd):
+        for i in range(len(mr)):
+            cur_mr, cur_rtd = mr[i], rtd[i]
             
-            mr = np.float64(mr) 
-            rtd = np.float64(rtd)
+            cur_mr = np.float64(cur_mr) 
+            cur_rtd = np.float64(cur_rtd)
             
-            mr /= 255.
-            rtd /= 255.
+            cur_mr /= 255.
+            cur_rtd /= 255.
             
-            mr_rtd_roi[roi] = [mr, rtd]
+            mr[i], rtd[i] = cur_mr, cur_rtd
         
-        return mr_rtd_roi
+        return mr, rtd
 
-    def __augment__(self, label_roi, mr_rtd_roi, clinic_data_roi):
-        rois = mr_rtd_roi.keys()
-        for roi in rois:
-            if label_roi[roi] != 'stable':
-                mr, rtd = mr_rtd_roi[roi]
-                augmented_mr = self.__rotate_image__(mr,roi)
-                augmented_rtd = self.__rotate_image__(rtd,roi)
-                
-                augmented_mr_rtd = {n_roi:[augmented_mr[n_roi], augmented_rtd[n_roi]] for n_roi in augmented_mr.keys()}
-                
-                new_rois = augmented_mr.keys()
-                
-                augmented_label = {n_roi:label_roi[roi] for n_roi in new_rois}
-                augmented_clinic_data = {n_roi:clinic_data_roi[roi] for n_roi in new_rois}
-                
-                label_roi |= augmented_label
-                mr_rtd_roi |= augmented_mr_rtd
-                clinic_data_roi |= augmented_clinic_data
-                
-        return label_roi, mr_rtd_roi, clinic_data_roi 
+    def __augment_train_set__(self):
+        i = 0
+        total_len = len(self.train_set['mr'])
+        while i < total_len:
+            if self.train_set['label'][i] == 1:
+                mr, rtd = self.train_set['mr'][i], self.train_set['rtd'][i]
+                augmented_mr = self.__rotate_image__(mr)
+                augmented_rtd = self.__rotate_image__(rtd)
 
-    def __rotate_image__(self, image, roi) -> dict:
-        rotated_images = {}
+                augmented_label = [self.train_set['label'][i]] * len(augmented_mr)
+                augmented_clinic_data = [self.train_set['clinic_data'][i]] * len(augmented_mr)
+                
+                self.train_set['mr'][i+1:i+1] = augmented_mr
+                self.train_set['rtd'][i+1:i+1] = augmented_rtd
+                self.train_set['clinic_data'][i+1:i+1] = augmented_clinic_data
+                self.train_set['label'][i+1:i+1] = augmented_label 
+                
+                total_len += len(augmented_mr)
+                i += len(augmented_mr)
+                
+            i+=1
+                
+                
+
+    def __rotate_image__(self, image) -> dict:
+        rotated_images = []
         axes = {'z':(0,1), 'x':(1, 2), 'y':(0,2)}
         angles = [90, 180, 270]
         
         for axes_key in axes.keys():
             for angle in angles:
                 k = angle // 90  # Number of 90-degree rotations
-                rotated_images[f'{roi}_{axes_key}_{angle}'] = np.rot90(image, k, axes[axes_key])
+                rotated_images.append(np.rot90(image, k, axes[axes_key]))
         
         return rotated_images
     
-    def __append_to_output_lists__(self, label_roi, mr_rtd_roi, clinic_data_roi):
-        for roi in mr_rtd_roi.keys():
-            mr, rtd = mr_rtd_roi[roi]
-            label = label_roi[roi]
-            clinic_data = clinic_data_roi[roi]
-
+    def __encode_labels__(self):
+        for i in range(len(self.global_data['label'])):
+            self.global_data['label'][i] = [1 if x == 'recurrence' else 0 for x in self.global_data['label'][i]]
         
-            self.all_clinic_data.append(clinic_data)
-            self.all_lesions.append(mr)
-            self.all_rtdoses.append(rtd)
-            self.all_labels.append(label)
+        tmp = np.array([l for sl in self.global_data['clinic_data'] for l in sl])        
+        tmp_enc = [preprocessing.LabelEncoder().fit(tmp[:,j]) for j in[0,1,3] ]
+        
+        for i in range(len(self.global_data['clinic_data'])):
+            tmp_cur = np.array(self.global_data['clinic_data'][i])
+            for n, j in enumerate([0, 1, 3]):
+                tmp_cur[:,j] = tmp_enc[n].transform(tmp_cur[:,j])
+
+            self.global_data['clinic_data'][i] = tmp_cur.tolist()
     
-    def __one_hot__(self):
-        self.all_labels = 1 - preprocessing.LabelEncoder().fit(self.all_labels).transform(self.all_labels)
-        
-        for j in [0, 1, 3]:
-            self.all_clinic_data = np.array(self.all_clinic_data)
-            self.all_clinic_data[:,j] = preprocessing.LabelEncoder().fit(self.all_clinic_data[:,j]).transform(self.all_clinic_data[:,j])
-
-        self.all_clinic_data = [[int(float(x)) for x in row] for row in self.all_clinic_data]
+    def __generate_split__(self):
+        for i, subject_id in enumerate(self.global_data['subject_id']):
+            target = self.test_set
+            if subject_id in self.split_info['train']:
+                target = self.train_set
+            
+            target['label'].extend(self.global_data['label'][i])
+            target['clinic_data'].extend(self.global_data['clinic_data'][i])
+            target['mr'].extend(self.global_data['mr'][i])
+            target['rtd'].extend(self.global_data['rtd'][i])
     
     def __save__(self):
-        np.save(self.ALL_LABELS_PATH, np.array(self.all_labels))
-        np.save(self.ALL_CLINIC_DATA_PATH, self.all_clinic_data)
-        np.save(self.ALL_LESIONS_PATH,  np.array(self.all_lesions))
-        np.save(self.ALL_RTDOSES_PATH, np.array(self.all_rtdoses))
+        self.train_set['mr'] = np.array(self.train_set['mr'], dtype=np.float64)
+        self.train_set['rtd'] = np.array(self.train_set['rtd'], dtype=np.float64)
+        self.train_set['label'] = np.array(self.train_set['label'], dtype=np.float64)
+        self.train_set['clinic_data'] = np.array(self.train_set['clinic_data'], dtype=np.float64)
+        
+        self.test_set['mr'] = np.array(self.test_set['mr'], dtype=np.float64)
+        self.test_set['rtd'] = np.array(self.test_set['rtd'], dtype=np.float64)
+        self.test_set['label'] = np.array(self.test_set['label'], dtype=np.float64)
+        self.test_set['clinic_data'] = np.array(self.test_set['clinic_data'], dtype=np.float64)
+        
+        with open(os.path.join(self.OUTPUT_DATA_PATH, 'train_set.pkl'), 'wb') as f:
+            pickle.dump(self.train_set, f)
+        
+        with open(os.path.join(self.OUTPUT_DATA_PATH, 'test_set.pkl'), 'wb') as f:
+            pickle.dump(self.test_set, f)
+        
     
-    def main(self, cleanOutDir = True):
-        self.__adjust_dataframes__()
+    def __split_subjects__(self):
+        # all_subject_id = pd.read_excel(self.CLINIC_DATA_PATH, sheet_name='pt_level')['unique_pt_id'].values
+        # random.shuffle(all_subject_id)
+        # last_train = int(len(all_subject_id)*.8)
+        # self.split_info = {'train': all_subject_id[:last_train], 'test': all_subject_id[last_train:]}
+        subjects_test = [427,243,257,224,420,312,316,199,219,492,332,364,132]
+        subjects_train = [463,158,247,408,234,421,431,346,487,152,274,338,105,293,314,227,330,391,313,270,127,324,342,121,244,115,245,103,246,455,151,147,114,467]
         
-        if cleanOutDir:
-            self.__clean_output_directory__()
-        
-        metadata_by_subjectid = self.rawdata_meta.groupby(['subject_id'])
-        total_subjects = len(metadata_by_subjectid)
-        
-        print('Saving dcm to npy...')
-        
-        for cnt, (subject_id, values) in enumerate(metadata_by_subjectid):
-            metadata_by_studyuid = [(k,v) for (k,v) in values.groupby(['study_uid'])]
-            metadata_by_studyuid = sorted(metadata_by_studyuid, key = lambda x: x[1]['study_date'].iloc[0])
-            
-            subject_id = int(subject_id[0].split('_')[1]) # remove GK
-            
-            for course ,(_, values) in enumerate(metadata_by_studyuid, start=1):
-                path_MR, path_RTD, path_RTS = self.__get_mr_rtd_rts_path__(values)
-                
-                mr, rtd = self.__handle_mr_rtd__(path_MR, path_RTD)        
-                masks = self.__handle_rts__(path_RTS, path_MR, subject_id, course)
-                
-                mr_rtd_roi = self.__preprocess__(mr, rtd, masks)
-                labels_roi = self.__get_labels__(masks.keys(), subject_id, course)
-                clinic_data_roi = self.__get_clinic_data__(masks.keys(), subject_id, course)
-                
-                labels_roi, mr_rtd_roi, clinic_data_roi = self.__augment__(labels_roi, mr_rtd_roi, clinic_data_roi)
-                
-                self.__append_to_output_lists__(labels_roi, mr_rtd_roi, clinic_data_roi)
-                    
-            print(f'\rStep: {cnt+1}/{total_subjects}', end='')
-        
-        self.__one_hot__()
-        self.__save__()
-        
-        print('Data has been read successfully!\n')
+        self.split_info = {'train': subjects_train, 'test': subjects_test}
+
+
 
 if __name__ == '__main__':
     dr = Data_Reader()
