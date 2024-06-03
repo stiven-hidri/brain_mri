@@ -322,7 +322,10 @@ class Data_Reader():
         subjects_test = [427,243,257,224,420,312,316,199,219,492,332,364,132]
         subjects_train = [463,158,247,408,234,421,431,346,487,152,274,338,105,293,314,227,330,391,313,270,127,324,342,121,244,115,245,103,246,455,151,147,114,467]
         
-        self.split_info = {'train': subjects_train, 'test': subjects_test}
+        self.split_info = {
+            'train': subjects_train, 
+            'test': subjects_test
+        }
 
 
 
