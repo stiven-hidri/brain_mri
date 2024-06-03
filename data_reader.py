@@ -45,8 +45,7 @@ class Data_Reader():
             
         self.__split_subjects__()
         
-        metadata_by_subjectid = self.rawdata_meta.groupby(['subject_id'])
-        
+        metadata_by_subjectid = self.rawdata_meta[self.rawdata_meta['subject_id'] == 'GK_463'].groupby(['subject_id'])
         total_subjects = len(metadata_by_subjectid)
         
         print('Saving dcm to npy...')
