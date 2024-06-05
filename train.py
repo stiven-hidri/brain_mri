@@ -3,18 +3,17 @@ import pickle
 from sklearn.metrics import confusion_matrix
 from model import get_model
 
-TRAIN_PATH = os.path.join("..", "data", "train_set.pkl")
-TEST_PATH = os.path.join("..", "data", "test_set.pkl")
+TRAIN_SET_PATH = os.path.join("..", "data", "train_set.pkl")
+TEST_SET_PATH = os.path.join("..", "data", "test_set.pkl")
 
-with open(TRAIN_PATH, "rb") as f:
-    train_test = pickle.load(f)
-with open(TEST_PATH, "rb") as f:
-    test_set = pickle.load(f)    
+with open(TRAIN_SET_PATH, "rb") as f_train, open(TEST_SET_PATH, "rb") as f_test:
+    train_test = pickle.load(f_train)
+    test_set = pickle.load(f_test)    
 
 model = get_model()
 model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
 
-model.fit( [train_test['mr'], train_test['rtd'], train_test['clinic_data']], train_test['label'], epochs=20, batch_size=64 )
+model.fit( [train_test['mr'], train_test['rtd'], train_test['clinic_data']], train_test['label'], epochs=50, batch_size=64 )
 model.save("model.keras")
 
 # model = keras.models.load_model("model.keras")

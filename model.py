@@ -2,8 +2,8 @@ import keras
 from keras import layers
 import tensorflow as tf
 
-keras.utils.set_random_seed(41)
-tf.config.experimental.enable_op_determinism()
+# keras.utils.set_random_seed(41)
+# tf.config.experimental.enable_op_determinism()
 
 def get_model():
     input_l = keras.Input((40, 40, 40, 1), name="Les_Input")  # Depend on the cropped lesion shape (could be different)

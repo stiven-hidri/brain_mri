@@ -10,23 +10,20 @@ from scipy.ndimage import zoom
 from sklearn import preprocessing
 from utils import rm_pss, couple_roi_names
 import random
+import SimpleITK as sitk
 
 class Data_Reader():
     def __init__(self) -> None:
         #paths
-        self.RAW_DATA_PATH = os.path.join('..', 'descriptive')
-        self.RAWDATA_META_PATH = os.path.join(self.RAW_DATA_PATH, 'metadata.csv')
-        self.CLINIC_DATA_PATH = os.path.join('..', 'Brain-TR-GammaKnife-Clinical-Information.xlsx')
-        self.OUTPUT_DATA_PATH = os.path.join('..', 'data')
-        self.ALL_CLINIC_DATA_PATH =  os.path.join(self.OUTPUT_DATA_PATH, 'all_clinic_data.npy')
-        self.ALL_LESIONS_PATH =  os.path.join(self.OUTPUT_DATA_PATH, 'all_lesions.npy')
-        self.ALL_RTDOSES_PATH =  os.path.join(self.OUTPUT_DATA_PATH, 'all_rtdoses.npy')
-        self.ALL_LABELS_PATH =  os.path.join(self.OUTPUT_DATA_PATH, 'all_labels.npy')
+        self.RAW_DATA_FOLDER_PATH = os.path.join('..', 'descriptive')
+        self.RAWDATA_META_FILE_PATH = os.path.join(self.RAW_DATA_FOLDER_PATH, 'metadata.csv')
+        self.CLINIC_DATA_FILE_PATH = os.path.join('..', 'Brain-TR-GammaKnife-Clinical-Information.xlsx')
+        self.OUTPUT_DATA_FOLDER_PATH = os.path.join('..', 'data')
 
         #adjusting metadata and clinical data dataframes
-        self.rawdata_meta = pd.read_csv(self.RAWDATA_META_PATH)
-        self.clinic_data_ll = pd.read_excel(self.CLINIC_DATA_PATH, sheet_name='lesion_level')
-        self.clinic_data_cl = pd.read_excel(self.CLINIC_DATA_PATH, sheet_name='course_level')
+        self.rawdata_meta = pd.read_csv(self.RAWDATA_META_FILE_PATH)
+        self.clinic_data_ll = pd.read_excel(self.CLINIC_DATA_FILE_PATH, sheet_name='lesion_level')
+        self.clinic_data_cl = pd.read_excel(self.CLINIC_DATA_FILE_PATH, sheet_name='course_level')
         
         self.clinic_data = None
 
@@ -45,7 +42,8 @@ class Data_Reader():
             
         self.__split_subjects__()
         
-        metadata_by_subjectid = self.rawdata_meta[self.rawdata_meta['subject_id'] == 'GK_463'].groupby(['subject_id'])
+        # metadata_by_subjectid = self.rawdata_meta[self.rawdata_meta['subject_id'] == 'GK_463'].groupby(['subject_id'])
+        metadata_by_subjectid = self.rawdata_meta.groupby(['subject_id'])
         total_subjects = len(metadata_by_subjectid)
         
         print('Saving dcm to npy...')
@@ -59,20 +57,16 @@ class Data_Reader():
             for course ,(_, values) in enumerate(metadata_by_studyuid, start=1):
                 path_MR, path_RTD, path_RTS = self.__get_mr_rtd_rts_path__(values)
                 
-                mr, rtd = self.__handle_mr_rtd__(path_MR, path_RTD)        
-                masks = self.__handle_rts__(path_RTS, path_MR, subject_id, course)
+                mr, rtd = self.__get_mr_rtd_resampled__(path_MR, path_RTD)
+                masks = self.__get_rts__(path_RTS, path_MR, subject_id, course)
                 
                 rois = masks.keys()
                 
-                mr, rtd = self.__preprocess__(rois, mr, rtd, masks)
+                mr, rtd = self.__preprocess__(rois, masks, mr, rtd)
                 labels = self.__get_labels__(rois, subject_id, course)
                 clinic_data = self.__get_clinic_data__(rois, subject_id, course)
                 
-                self.global_data['subject_id'].append(subject_id)
-                self.global_data['mr'].append(mr)
-                self.global_data['rtd'].append(rtd)
-                self.global_data['clinic_data'].append(clinic_data)
-                self.global_data['label'].append(labels)
+                self.__append_data__(self, subject_id, mr, rtd, clinic_data, labels)
                     
             print(f'\rStep: {cnt+1}/{total_subjects}', end='')
         
@@ -103,49 +97,43 @@ class Data_Reader():
         self.clinic_data = pd.merge_ordered(self.clinic_data_ll, self.clinic_data_cl, on=['subject_id', 'course'], how='inner')
 
     def __clean_output_directory__(self):
-        for filename in os.listdir(self.OUTPUT_DATA_PATH):
-            file_path = os.path.join(self.OUTPUT_DATA_PATH, filename)
+        for filename in os.listdir(self.OUTPUT_DATA_FOLDER_PATH):
+            file_path = os.path.join(self.OUTPUT_DATA_FOLDER_PATH, filename)
             if os.path.isfile(file_path) or os.path.islink(file_path):
                 os.remove(file_path)
             elif os.path.isdir(file_path):
                 shutil.rmtree(file_path)
 
     def __get_mr_rtd_rts_path__(self, values):
-        path_MR = os.path.join(self.RAW_DATA_PATH, values.loc[values['modality'] == 'MR', 'file_path'].iloc[0])
-        path_RTD = os.path.join(self.RAW_DATA_PATH, values.loc[values['modality'] == 'RTDOSE', 'file_path'].iloc[0])
-        path_RTS = os.path.join(self.RAW_DATA_PATH, values.loc[values['modality'] == 'RTSTRUCT', 'file_path'].iloc[0])
+        path_MR = os.path.join(self.RAW_DATA_FOLDER_PATH, values.loc[values['modality'] == 'MR', 'file_path'].iloc[0])
+        path_RTD = os.path.join(self.RAW_DATA_FOLDER_PATH, values.loc[values['modality'] == 'RTDOSE', 'file_path'].iloc[0])
+        path_RTS = os.path.join(self.RAW_DATA_FOLDER_PATH, values.loc[values['modality'] == 'RTSTRUCT', 'file_path'].iloc[0])
         
         return path_MR, path_RTD, path_RTS
 
-# TODO: check correct preprocessing (armonic stuff)
-    def __handle_mr_rtd__(self, path_MR, path_RTD): 
-        #MR dicoms
-        file_names_MR = [os.path.join(path_MR, f) for f in os.listdir(path_MR) if f.endswith('.dcm')]        
-        mr_data = [pydicom.dcmread(p) for p in file_names_MR] 
+    def __get_mr_rtd_resampled__(self, path_MR, path_RTD):
+        mr_dicom = self.__read_dicom__(path_MR)
+        rtd_dicom = self.__read_dicom__(path_RTD)        
         
-        mr_pixel_data = [p.pixel_array for p in mr_data] 
+        rtd_resampled_dicom = sitk.Resample(rtd_dicom, mr_dicom)
         
-        RefDs = mr_data[0]
+        mr_np = sitk.GetArrayFromImage(mr_dicom)
+        rtd_np = sitk.GetArrayFromImage(rtd_resampled_dicom)
         
-        ConstPixelDims = (int(RefDs.Rows), int(RefDs.Columns), len(file_names_MR))
-        ArrayDicom =  np.empty(ConstPixelDims, dtype=RefDs.pixel_array.dtype)
-        for i, pa in enumerate(mr_pixel_data):
-            ArrayDicom[:, :, i] = pa
-        
-        #RTD dicom  
-        file_path_RTD  = [os.path.join(path_RTD, f) for f in os.listdir(path_RTD) if f.endswith('.dcm')][0]
-        dcm_RTD = pydicom.dcmread(file_path_RTD)
-        rtdose_array = dcm_RTD.pixel_array
-        
-        target_shape = ArrayDicom.shape
-        original_shape = rtdose_array.shape
-        factor = (target_shape[0]/original_shape[0], target_shape[1]/original_shape[1], target_shape[2]/original_shape[2])
-        
-        mapped_dose = zoom(rtdose_array, factor)
-        
-        return ArrayDicom, mapped_dose
+        return mr_np, rtd_np
 
-    def __handle_rts__(self, path_RTS, series_path, subject_id, course):
+    def __read_dicom__(self, path):
+        reader = sitk.ImageSeriesReader()
+        reader_names = reader.GetGDCMSeriesFileNames(path)
+        reader.SetFileNames(reader_names)
+        image = reader.Execute()
+        
+        if image.GetDimension()==4 and image.GetSize()[3]==1:
+            image = image[...,0]
+        
+        return image
+
+    def __get_rts__(self, path_RTS, series_path, subject_id, course):
         rt_struct_path = [os.path.join(path_RTS, f) for f in os.listdir(path_RTS) if f.endswith('.dcm')][0]
         rtstruct = RTStructBuilder.create_from(dicom_series_path=series_path, rt_struct_path=rt_struct_path)
         rois = self.clinic_data.loc[(self.clinic_data['subject_id'] == subject_id) & (self.clinic_data['course'] == course), 'roi'].values
@@ -156,7 +144,11 @@ class Data_Reader():
         for roi in rois:
             if 'Skull' not in roi: # exclude skull annotations
                 mask_3d = rtstruct.get_roi_mask_by_name(couples[roi])
-                masks[roi] = mask_3d * 1
+                
+                mask_3d = mask_3d * 1
+                mask_3d = np.swapaxes(mask_3d, 0, 2)
+                mask_3d = np.swapaxes(mask_3d, 1, 2)
+                masks[roi] = mask_3d
                 
         return masks
 
@@ -178,7 +170,7 @@ class Data_Reader():
             
         return to_return
     
-    def __preprocess__(self, rois, mr, rtd, masks):   
+    def __preprocess__(self, rois, masks, mr, rtd):   
         mr, rtd = self.__mask_and_crop__(rois, mr, rtd, masks)
         
         mr, rtd = self.__resize__(mr, rtd)
@@ -233,6 +225,13 @@ class Data_Reader():
             mr[i], rtd[i] = cur_mr, cur_rtd
         
         return mr, rtd
+
+    def __append_data__(self, subject_id, mr, rtd, clinic_data, labels):
+        self.global_data['subject_id'].append(subject_id)
+        self.global_data['mr'].append(mr)
+        self.global_data['rtd'].append(rtd)
+        self.global_data['clinic_data'].append(clinic_data)
+        self.global_data['label'].append(labels)
 
     def __augment_train_set__(self):
         i = 0
@@ -306,15 +305,15 @@ class Data_Reader():
         self.test_set['label'] = np.array(self.test_set['label'], dtype=np.float64)
         self.test_set['clinic_data'] = np.array(self.test_set['clinic_data'], dtype=np.float64)
         
-        with open(os.path.join(self.OUTPUT_DATA_PATH, 'train_set.pkl'), 'wb') as f:
+        with open(os.path.join(self.OUTPUT_DATA_FOLDER_PATH, 'train_set.pkl'), 'wb') as f:
             pickle.dump(self.train_set, f)
         
-        with open(os.path.join(self.OUTPUT_DATA_PATH, 'test_set.pkl'), 'wb') as f:
+        with open(os.path.join(self.OUTPUT_DATA_FOLDER_PATH, 'test_set.pkl'), 'wb') as f:
             pickle.dump(self.test_set, f)
         
     
     def __split_subjects__(self):
-        # all_subject_id = pd.read_excel(self.CLINIC_DATA_PATH, sheet_name='pt_level')['unique_pt_id'].values
+        # all_subject_id = pd.read_excel(self.CLINIC_DATA_FILE_PATH, sheet_name='pt_level')['unique_pt_id'].values
         # random.shuffle(all_subject_id)
         # last_train = int(len(all_subject_id)*.8)
         # self.split_info = {'train': all_subject_id[:last_train], 'test': all_subject_id[last_train:]}
