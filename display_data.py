@@ -1,62 +1,89 @@
-import numpy as np
-from matplotlib import pyplot as plt
-import sys
 import os
+import pydicom
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import ndimage
+from rt_utils import RTStructBuilder
+from utils import couple_roi_names
+import SimpleITK as sitk
 
-def display(plt, axes, images, cur_row, c, f_type):
+def handle_mr_rtd_sitk(path_MR, path_RTD):
+    
+    reader_mr = sitk.ImageSeriesReader()
+    reader_mr_names = reader_mr.GetGDCMSeriesFileNames(path_MR)
+    reader_mr.SetFileNames(reader_mr_names)
+    mr = reader_mr.Execute()
+    
+    if mr.GetDimension()==4 and mr.GetSize()[3]==1:
+        mr = mr[...,0]
+    
+    reader_rtd = sitk.ImageSeriesReader()
+    reader_rtd_names = reader_rtd.GetGDCMSeriesFileNames(path_RTD)
+    reader_rtd.SetFileNames(reader_rtd_names)
+    rtd = reader_rtd.Execute()
+
+    if rtd.GetDimension()==4 and rtd.GetSize()[3]==1:
+        rtd = rtd[...,0]
+
+    rtd = sitk.Resample(rtd, mr)
+    
+    mr, rtd = sitk.GetArrayFromImage(mr), sitk.GetArrayFromImage(rtd)
+    
+    return mr, rtd
+
+def __handle_rts__( path_RTS, series_path):
+    rt_struct_path = [os.path.join(path_RTS, f) for f in os.listdir(path_RTS) if f.endswith('.dcm')][0]
+    rtstruct = RTStructBuilder.create_from(dicom_series_path=series_path, rt_struct_path=rt_struct_path)
+    
+    final = None
+    
+    for i, roi in enumerate(rtstruct.get_roi_names()):
+        if 'Skull' not in roi: # exclude skull annotations
+            mask_3d = rtstruct.get_roi_mask_by_name(roi)
+            mask_3d = mask_3d * 1
+            mask_3d = np.swapaxes(mask_3d, 0, 2)
+            mask_3d = np.swapaxes(mask_3d, 1, 2)
+            if(i == 0):
+                final = mask_3d
+            else:
+                final = np.logical_or(final, mask_3d)
+                
+    return final
+
+def plot(stuff, c):
+    r = len(stuff)
+    
+    fig, axes = plt.subplots(nrows=r, ncols=c, figsize=(12,6))
+    indexes = []
+    
+    for i in range(stuff[2].shape[0]):
+        if(np.sum(stuff[2][i].reshape((1,-1))) > 0):
+            indexes.append(i)
+            
+    np.linspace(min(indexes), max(indexes), c+2, dtype=int)[1:-1]
+    
+    for i, s in enumerate(stuff):
+        images = s[indexes]
+        display(plt, axes, images, i, c)
+    
+    os.makedirs(os.path.join(os.curdir, "sample_images"), exist_ok=True)
+    plt.savefig(os.path.join(os.curdir, "sample_images", f"test_affine.png"))
+    plt.show()
+
+def display(plt, axes, images, cur_row, c):
     for i in range(c):
         axes[cur_row, i].imshow(images[i])
         axes[cur_row, i].set_axis_off()
 
-def display_data(folder_path:str):
-    files = [f for f in os.listdir(folder_path)]
-    
-    RTD_file = [f for f in files if f.endswith("RTD.npy")][0]
-    MR_file = [f for f in files if f.endswith("MR.npy")][0]
-    RTS_file = [f for f in files if f.endswith("RTS.npy")][0]
-    MR_les_file = [f for f in files if f.endswith("MR_les.npy")][0]
-    RTD_les_file = [f for f in files if f.endswith("RTD_les.npy")][0]
-    
-    RTD_array = np.load(os.path.join(folder_path, RTD_file))
-    MR_array = np.load(os.path.join(folder_path, MR_file))
-    RTS_array = np.load(os.path.join(folder_path, RTS_file))
-    RTD_les_array = np.load(os.path.join(folder_path, RTD_les_file))
-    MR_les_array = np.load(os.path.join(folder_path, MR_les_file))
-    r,c = 5, 12
-
-# Create the figure and subplots
-    fig, axes = plt.subplots(nrows=r, ncols=c, figsize=(20,10))
-    
-    indexes = np.linspace(0, len(RTS_array), c+2, dtype=int)[1:-1]
-    
-    print(indexes)
-    
-    images = RTS_array[indexes]
-    display(plt, axes, images, 0, c, "RTS")
-    
-    images = RTD_array[indexes]
-    display(plt, axes, images, 1, c, "RTD")
-    
-    images = MR_array[indexes]
-    display(plt, axes, images, 2, c, "MR")
-    
-    images = MR_les_array[indexes]
-    display(plt, axes, images, 3, c, "MR")
-    
-    images = RTD_les_array[indexes]
-    display(plt, axes, images, 4, c, "MR")
-    
-    os.makedirs(os.path.join(os.curdir, "sample_images"), exist_ok=True)
-    name = folder_path.split('\\')[-1]
-    plt.savefig(os.path.join(os.curdir, "sample_images", f"old_{name.replace('.','')}.png"))
-        
-    # plt.figure(1)
-    # plt.imshow(RTD_array[0], cmap='gray')
-    # plt.show()
-    # plt.figure(2)
-    # plt.imshow(MR_array[200], cmap='gray')
-    # plt.show()
-
 if __name__ == "__main__":
-    folder_path = sys.argv[1] if len(sys.argv)>1 else "C:\\Users\\hidri\\TESI\\data_old\\GK_103_1.3.6.1.4.1.14519.5.2.1.261238491105529422607835392969394449648"
-    display_data(folder_path)
+    path_MR = os.path.join('test_data', 'mr')
+    path_RTD = os.path.join('test_data', 'rtd')
+    path_RTS = os.path.join('test_data', 'rts')
+    mr, rtd = handle_mr_rtd_sitk(path_MR, path_RTD)
+    rts = __handle_rts__(path_RTS, path_MR)
+    
+    print(rts.shape)
+    print(mr.shape)
+    print(rtd.shape)
+    
+    plot([mr, rtd, rts], 12)
