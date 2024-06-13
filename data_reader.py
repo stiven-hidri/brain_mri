@@ -15,8 +15,8 @@ import SimpleITK as sitk
 class Data_Reader():
     def __init__(self) -> None:
         #paths
-        self.RAW_DATA_FOLDER_PATH = os.path.join('..', 'descriptive')
-        self.RAWDATA_META_FILE_PATH = os.path.join(self.RAW_DATA_FOLDER_PATH, 'metadata.csv')
+        self.RAWDATA_FOLDER_PATH = os.path.join('..', 'descriptive')
+        self.RAWDATA_META_FILE_PATH = os.path.join(self.RAWDATA_FOLDER_PATH, 'metadata.csv')
         self.CLINIC_DATA_FILE_PATH = os.path.join('..', 'Brain-TR-GammaKnife-Clinical-Information.xlsx')
         self.OUTPUT_DATA_FOLDER_PATH = os.path.join('..', 'data')
 
@@ -105,9 +105,9 @@ class Data_Reader():
                 shutil.rmtree(file_path)
 
     def __get_mr_rtd_rts_path__(self, values):
-        path_MR = os.path.join(self.RAW_DATA_FOLDER_PATH, values.loc[values['modality'] == 'MR', 'file_path'].iloc[0])
-        path_RTD = os.path.join(self.RAW_DATA_FOLDER_PATH, values.loc[values['modality'] == 'RTDOSE', 'file_path'].iloc[0])
-        path_RTS = os.path.join(self.RAW_DATA_FOLDER_PATH, values.loc[values['modality'] == 'RTSTRUCT', 'file_path'].iloc[0])
+        path_MR = os.path.join(self.RAWDATA_FOLDER_PATH, values.loc[values['modality'] == 'MR', 'file_path'].iloc[0])
+        path_RTD = os.path.join(self.RAWDATA_FOLDER_PATH, values.loc[values['modality'] == 'RTDOSE', 'file_path'].iloc[0])
+        path_RTS = os.path.join(self.RAWDATA_FOLDER_PATH, values.loc[values['modality'] == 'RTSTRUCT', 'file_path'].iloc[0])
         
         return path_MR, path_RTD, path_RTS
 
