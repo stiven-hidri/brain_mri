@@ -33,7 +33,7 @@ def test(model, test_set, model_name):
     print(f"Specificity: {specificity:.4f}")
     print(f"F1-score: {f1_score:.4f}")
     
-    log = f"{model_name}\nAccuracy: {accuracy:.4f}\nSensitivity (Recall): {sensitivity:.4f}\nSpecificity: {specificity:.4f}\nF1-score: {f1_score:.4f}\n"
+    log = f"{model_name}\nAccuracy: {accuracy:.4f}\nSensitivity (Recall): {sensitivity:.4f}\nSpecificity: {specificity:.4f}\nF1-score: {f1_score:.4f}\n\n"
     with open(os.path.join('saved_models','log_results.txt'), "a") as logfile:
         logfile.write(log)
 
