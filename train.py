@@ -51,7 +51,7 @@ def get_trained_model(load_from_file=False):
         
         model_name = f"{datetime.now().strftime(r'%Y-%m-%d_%H-%M-%S')}_model.keras"
         
-        model.save(os.path.join(SAVED_MODELS_PATH, ))
+        model.save(os.path.join(SAVED_MODELS_PATH, model_name))
         
     return model, model_name
 
