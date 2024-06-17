@@ -47,7 +47,7 @@ def get_trained_model(load_from_file=False):
         model = base_model.get_model()
         
         model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
-        model.fit( [train_test['mr'], train_test['rtd'], train_test['clinic_data']], train_test['label'], epochs=30, batch_size=64 )
+        model.fit( [train_test['mr'], train_test['rtd'], train_test['clinic_data']], train_test['label'], epochs=25, batch_size=64 )
         
         model_name = f"{datetime.now().strftime(r'%Y-%m-%d_%H-%M-%S')}_model.keras"
         

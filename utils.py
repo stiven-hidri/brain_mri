@@ -22,4 +22,4 @@ def clear_directory_content(PATH):
             shutil.rmtree(file_path)
 
 def rm_pss(s:str):
-    return ''.join(c for c in s if c.isalnum())
+    return '_'.join(c for c in s if c.isalnum())

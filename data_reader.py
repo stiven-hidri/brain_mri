@@ -1,5 +1,6 @@
 import os
 import pickle
+import re
 import pandas as pd
 import numpy as np
 import pydicom as dicom
@@ -42,7 +43,7 @@ class Data_Reader():
             
         self.__split_subjects__()
         
-        # metadata_by_subjectid = self.rawdata_meta[self.rawdata_meta['subject_id'] == 'GK_463'].groupby(['subject_id'])
+        # metadata_by_subjectid = self.rawdata_meta[(self.rawdata_meta['subject_id'] == 'GK_463') | (self.rawdata_meta['subject_id'] == 'GK_151') | (self.rawdata_meta['subject_id'] == 'GK_152')].groupby(['subject_id'])
         metadata_by_subjectid = self.rawdata_meta.groupby(['subject_id'])
         total_subjects = len(metadata_by_subjectid)
         
@@ -66,7 +67,7 @@ class Data_Reader():
                 labels = self.__get_labels__(rois, subject_id, course)
                 clinic_data = self.__get_clinic_data__(rois, subject_id, course)
                 
-                self.__append_data__(self, subject_id, mr, rtd, clinic_data, labels)
+                self.__append_data__(subject_id, mr, rtd, clinic_data, labels)
                     
             print(f'\rStep: {cnt+1}/{total_subjects}', end='')
         
@@ -166,6 +167,7 @@ class Data_Reader():
         
         for roi in rois:
             clinic_data_row = self.clinic_data.loc[(self.clinic_data['subject_id']==subject_id)&(self.clinic_data['course']==course)&(self.clinic_data['roi']==roi), ['mets_diagnosis', 'primary_diagnosis', 'age', 'gender', 'duration_tx_to_imag', 'fractions']].values[0]
+            clinic_data_row[0] = re.sub('[^0-9a-zA-Z]+', '_', clinic_data_row[0]).lower()
             to_return.append(clinic_data_row)
             
         return to_return
